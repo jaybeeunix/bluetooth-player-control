@@ -23,7 +23,7 @@ PLAYER_IFACE = 'org.mpris.MediaPlayer2.Player'
 
 def debug(msg):
     return
-    print(msg)
+    #print(msg)
 
 class ScreenSaver(object):
     def __init__(self):
@@ -51,6 +51,7 @@ class MediaPlayer(object):
 
         managed_objs = obj_manager.GetManagedObjects(dbus_interface='org.freedesktop.DBus.ObjectManager')
 
+        player = None
         for name, values in managed_objs.items():
             if self.mediaplayer1 in values:
                 debug('%s has what we want' % name)
@@ -62,8 +63,7 @@ class MediaPlayer(object):
                 debug('\tskipping %s: it doesn\'t have what we want' % name)
 
         if not player:
-            debug('No MediaPlayer1 interface found: Exiting.')
-            sys.exit(1)
+            raise RuntimeError('No (Bluetooth) MediaPlayer1 interface found: Is your Bluetooth device connected?')
 
         debug(player)
         if player_values['Status'] == 'playing':
@@ -199,10 +199,20 @@ class Gui(object):
     controls = ('Play', 'Next', 'Previous', 'Pause')
 
     def __init__(self):
-        self.media_player = MediaPlayer()
-        self.screen_saver = ScreenSaver()
+        try:
+            self.media_player = MediaPlayer()
+            self.screen_saver = ScreenSaver()
+            self.mpris = Mpris(self.media_player)
+        except Exception as excpt:
+            Gtk.MessageDialog(
+                flags=Gtk.DialogFlags.MODAL,
+                type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.CLOSE,
+                message_format=str(excpt)
+            ).run()
+            raise SystemExit(excpt)
+
         self.was_playing = False
-        self.mpris = Mpris(self.media_player)
 
         self.builder = Gtk.Builder()
         self.builder.add_from_file('bluetooth-player-control.glade')
