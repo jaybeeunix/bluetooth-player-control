@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# bluetooth-player-control
+#
+# Simple controls for a connected Bluetooth media player.
+#
+# Copyright 2015 Jason Burrell
+
+import signal
+import sys
+
+#FIXME: change to newer dbus bindings
+import dbus
+from dbus.mainloop.glib import DBusGMainLoop
+import dbus.service
+
+from gi.repository import Gtk
+
+IFACE = 'org.mpris.MediaPlayer2'
+PLAYER_IFACE = 'org.mpris.MediaPlayer2.Player'
+
+
+def debug(msg):
+    return
+    print(msg)
+
+class ScreenSaver(object):
+    def __init__(self):
+        sess_bus = dbus.SessionBus()
+        self.saver = dbus.Interface(sess_bus.get_object('org.gnome.ScreenSaver', '/org/gnome/ScreenSaver'), dbus_interface='org.gnome.ScreenSaver')
+        self.saver.connect_to_signal('ActiveChanged', self.on_changed)
+
+    def changed_callback(self, callback):
+        self.callback = callback
+
+    def on_changed(self, iface):
+        debug('handle_changed(%s)' % (iface))
+        self.callback(self.saver.GetActive())
+
+
+class MediaPlayer(object):
+    operations = ('Play', 'Next', 'Pause', 'Previous', 'Stop')
+    mediaplayer1 = 'org.bluez.MediaPlayer1'
+
+    def __init__(self):
+
+        sys_bus = dbus.SystemBus()
+        obj_manager = sys_bus.get_object('org.bluez', '/')
+        self.callbacks = {}
+
+        managed_objs = obj_manager.GetManagedObjects(dbus_interface='org.freedesktop.DBus.ObjectManager')
+
+        for name, values in managed_objs.items():
+            if self.mediaplayer1 in values:
+                debug('%s has what we want' % name)
+                player = name
+                player_values = values[self.mediaplayer1]
+                # TODO: allow the user to specify something to pick a specific player (this just stops at the first media player)
+                break
+            else:
+                debug('\tskipping %s: it doesn\'t have what we want' % name)
+
+        if not player:
+            debug('No MediaPlayer1 interface found: Exiting.')
+            sys.exit(1)
+
+        debug(player)
+        if player_values['Status'] == 'playing':
+            debug('Playing "%(Title)s" from /%(Album)s/ by %(Artist)s' % player_values['Track'])
+        else:
+            debug('not playing')
+
+        self.dev = dbus.Interface(sys_bus.get_object('org.bluez', player), dbus_interface=self.mediaplayer1)
+        self.dev_props = dbus.Interface(sys_bus.get_object('org.bluez', player), dbus_interface='org.freedesktop.DBus.Properties')
+        self.dev_props.connect_to_signal('PropertiesChanged', self.handle_props_changed)
+
+    def handle_props_changed(self, iface, props, data):
+        debug('handle_props_changed(\n\t%s,\n\t%s,\n\t%s)' % (iface, props, data))
+        for name, value in props.items():
+            if name in self.callbacks:
+                self.callbacks[name](value)
+
+
+    def prop(self, key):
+        return self.dev_props.Get(self.mediaplayer1, key)
+
+
+    def is_playing(self):
+        rtn = self.prop('Status') == 'playing'
+        debug('is_playing=%s %s' % (rtn, self.prop('Status')))
+        return rtn
+
+
+    def currently_playing(self):
+        return self.prop('Track')
+
+
+    def changed_callback(self, name, callback):
+        self.callbacks[name] = callback
+        return
+
+    def do_op(self, name):
+        if name in self.operations:
+            return self.dev.get_dbus_method(name, dbus_interface=self.mediaplayer1)()
+
+
+class Mpris(dbus.service.Object):
+    #FIXME: this interface isn't complete!
+    def __init__(self, media_player):
+        self.media_player = media_player
+        self.obj_path = '/org/mpris/MediaPlayer2'
+        self.prefix = IFACE + '.bluetooth-player-control'
+        self.bus_name = dbus.service.BusName(self.prefix, dbus.SessionBus())
+
+        #props
+        self.props = {
+            IFACE: {
+                'CanQuit': True,
+                'CanRaise': False,
+                'HasTrackList': False,
+                'Identity': 'bluetooth-player-control',
+                'SupportedUriSchemes': dbus.Array([], signature='s'),
+                'SupportedMimeTypes':  dbus.Array([], signature='s'),
+            },
+            PLAYER_IFACE: {
+                'PlaybackStatus': lambda: self.media_player.prop('Status').capitalize(),
+                'Rate': 1.0,
+                'Metadata': '',
+                'Volume': 0.0,
+                'Position': 0,
+                'MinimumRate': 1.0,
+                'MaximumRate': 1.0,
+                'CanGoNext': True,
+                'CanGoPrevious': True,
+                'CanPlay': True,
+                'CanPause': True,
+                'CanSeek': False,
+                'CanControl': True,
+            },
+        }
+        
+        dbus.service.Object.__init__(self, self.bus_name, self.obj_path)
+
+    @dbus.service.method(dbus_interface=IFACE)
+    def Raise(self):
+        pass
+
+    @dbus.service.method(dbus_interface=IFACE)
+    def Quit(self):
+        sys.exit(0)
+
+    @dbus.service.method(dbus_interface=dbus.PROPERTIES_IFACE,
+                         in_signature='ss',
+                         out_signature='v')
+    def Get(self, iface, prop):
+        this_prop = self.props[iface][prop]
+        if callable(this_prop):
+            return this_prop()
+        else:
+            return this_prop
+
+    @dbus.service.method(dbus_interface=PLAYER_IFACE)
+    def Next(self):
+        self.media_player.do_op('Next')
+    @dbus.service.method(dbus_interface=PLAYER_IFACE)
+    def Previous(self):
+        self.media_player.do_op('Previous')
+    @dbus.service.method(dbus_interface=PLAYER_IFACE)
+    def Play(self):
+        self.media_player.do_op('Play')
+    @dbus.service.method(dbus_interface=PLAYER_IFACE)
+    def Pause(self):
+        self.media_player.do_op('Pause')
+    @dbus.service.method(dbus_interface=PLAYER_IFACE)
+    def Stop(self):
+        self.media_player.do_op('Stop')
+    @dbus.service.method(dbus_interface=PLAYER_IFACE)
+    def PlayPause(self):
+        if self.media_player.is_playing():
+            self.media_player.do_op('Pause')
+        else:
+            self.media_player.do_op('Play')
+
+    @dbus.service.method(dbus_interface=PLAYER_IFACE)
+    def Seek(self, seek_to):
+        pass
+    @dbus.service.method(dbus_interface=PLAYER_IFACE)
+    def SetPosition(self, trackid, position):
+        pass
+    @dbus.service.method(dbus_interface=PLAYER_IFACE)
+    def OpenUri(self, uri):
+        pass
+        
+
+
+class Gui(object):
+    display_items = ('Artist', 'Title', 'Album')
+    controls = ('Play', 'Next', 'Previous', 'Pause')
+
+    def __init__(self):
+        self.media_player = MediaPlayer()
+        self.screen_saver = ScreenSaver()
+        self.was_playing = False
+        self.mpris = Mpris(self.media_player)
+
+        self.builder = Gtk.Builder()
+        self.builder.add_from_file('bluetooth-player-control.glade')
+        self.appwin = self.builder.get_object('appwin')
+        for item in self.display_items:
+            debug('getting %s' % item)
+            self.__dict__[item] = self.builder.get_object(item + 'lbl')
+        self.appwin.connect('delete_event', lambda x, y: sys.exit(0))
+        self.appwin.show_all()
+        self.update_playing()
+
+        # respond to these external events
+        self.media_player.changed_callback('Status', self.update_playing)
+        self.media_player.changed_callback('Track', self.update_playing)
+        self.screen_saver.changed_callback(self.screen_saver_changed)
+
+        # add actions to the buttons
+        def tmp_do(widget, name):
+            debug('about to do %s' % name)
+            self.media_player.do_op(name)
+        for cntl in self.controls:
+            self.builder.get_object(cntl + 'btn').connect('clicked', tmp_do, cntl)
+
+    def screen_saver_changed(self, active):
+        if active:
+            self.was_playing = self.media_player.is_playing()
+            if self.was_playing:
+                self.media_player.do_op('Pause')
+        else:
+            if self.was_playing:
+                self.media_player.do_op('Play')
+
+    def update_playing(self, cur=None):
+        if self.media_player.is_playing():
+            if cur == None or not isinstance(cur, dict):
+                cur = self.media_player.currently_playing()
+            for item in self.display_items:
+                debug('setting %s to %s' % (item, cur[item]))
+                if item == 'Title':
+                    self.__dict__[item].set_label('“' + cur[item] + '”')
+                else:
+                    self.__dict__[item].set_label(cur[item])
+            self.builder.get_object('Pausebtn').show()
+            self.builder.get_object('Playbtn').hide()
+        else:
+            #not playing anymore: clear everything
+            for item in self.display_items:
+                if item == 'Title':
+                    self.__dict__[item].set_label('Not Playing')
+                else:
+                    self.__dict__[item].set_label('')
+            # hide the "Pause" btn
+            self.builder.get_object('Pausebtn').hide()
+            self.builder.get_object('Playbtn').show()
+
+
+if __name__ == '__main__':
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    DBusGMainLoop(set_as_default=True)
+    gui = Gui()
+    Gtk.main()
