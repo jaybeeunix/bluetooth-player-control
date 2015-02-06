@@ -222,6 +222,7 @@ class Gui(object):
             self.__dict__[item] = self.builder.get_object(item + 'lbl')
         self.appwin.connect('delete_event', lambda x, y: sys.exit(0))
         self.appwin.set_keep_above(True)
+        self.appwin.set_stick(True)
         self.appwin.show_all()
         self.update_playing()
 
