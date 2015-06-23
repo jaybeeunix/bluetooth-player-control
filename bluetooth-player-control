@@ -9,6 +9,7 @@
 
 import signal
 import sys
+import os
 
 #FIXME: change to newer dbus bindings
 import dbus
@@ -215,7 +216,8 @@ class Gui(object):
         self.was_playing = False
 
         self.builder = Gtk.Builder()
-        self.builder.add_from_file('bluetooth-player-control.glade')
+        glade_file = os.path.realpath(__file__) +  '.glade'
+        self.builder.add_from_file(glade_file)
         self.appwin = self.builder.get_object('appwin')
         for item in self.display_items:
             debug('getting %s' % item)
