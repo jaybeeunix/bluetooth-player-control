@@ -16,6 +16,8 @@ import dbus
 from dbus.mainloop.glib import DBusGMainLoop
 import dbus.service
 
+import gi
+gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk
 
 IFACE = 'org.mpris.MediaPlayer2'
