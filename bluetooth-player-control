@@ -274,6 +274,9 @@ class Gui(object):
             self.builder.get_object('Pausebtn').hide()
             self.builder.get_object('Playbtn').show()
 
+        # for the window to resize to its smallest possible size
+        self.appwin.resize(1, 1)
+
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal.SIG_DFL)
